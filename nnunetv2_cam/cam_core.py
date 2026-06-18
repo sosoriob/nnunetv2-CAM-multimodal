@@ -272,13 +272,16 @@ def compute_cam_with_sliding_window(
                 targets = [SemanticSegmentationTarget(target_class, car_mask_float)]
 
                 # Compute CAM for this patch.
-                # With the model parameters frozen (above), the autograd graph must be
-                # anchored on the input instead, otherwise no tensor requires grad and
-                # backward fails. Making the input require grad builds the graph while
-                # still skipping the (large) saved conv inputs needed only for weight
-                # gradients -- which is what keeps peak memory low on big 3D patches.
+                # The autograd graph is anchored on the input (params are frozen above),
+                # otherwise no tensor requires grad and backward fails. The full forward
+                # graph is still retained for the backward to the target layer, so on big
+                # 3D patches we additionally run under mixed precision (autocast, fp16) --
+                # exactly as nnUNet's own inference does -- which is what actually brings
+                # peak activation memory down enough to fit (e.g. ResEnc-L on a
+                # 160x192x160 patch: ~23 GB fp32 -> ~16 GB under autocast).
                 workon = workon.requires_grad_(True)
-                cam_output = cam(input_tensor=workon, targets=targets)[0, :]
+                with torch.autocast(device.type, enabled=(device.type == "cuda")):
+                    cam_output = cam(input_tensor=workon, targets=targets)[0, :]
                 grayscale_cam = torch.from_numpy(cam_output).to(device)
 
                 # Accumulate CAM
