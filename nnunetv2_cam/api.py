@@ -6,6 +6,7 @@ Class Activation Maps (CAMs) using pre-trained nnUNetv2 models.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import List, Union,Optional
 
@@ -216,10 +217,14 @@ If you find this tool useful, please consider citing:
         if verbose:
             iterator.set_postfix_str(f"Processing: {Path(input_file).name}")
 
-        # Get base filename for output
-        base_name = Path(input_file).stem
-        if base_name.endswith("_0000"):
-            base_name = base_name[:-5]
+        # Get base filename for output. Strip the full file ending (e.g. ".nii.gz",
+        # which Path.stem would leave a stray ".nii" behind) and the "_NNNN" channel suffix.
+        _name = Path(input_file).name
+        for _ext in (".nii.gz", ".nii", ".mha", ".nrrd"):
+            if _name.endswith(_ext):
+                _name = _name[: -len(_ext)]
+                break
+        base_name = re.sub(r"_\d{4}$", "", _name)
         output_file = os.path.join(output_folder, f"{base_name}")
 
         # Preprocess input using predictor's preprocessing
@@ -306,24 +311,48 @@ def _preprocess_file(predictor: nnUNetPredictor, input_file: str, output_file: s
     from batchgenerators.utilities.file_and_folder_operations import subfiles
     from nnunetv2.inference.data_iterators import preprocessing_iterator_fromfiles
 
-    # Find all channel files for this case
-    # nnUNetv2 expects files like: case_0000.nii.gz, case_0001.nii.gz, etc.
+    # Find all channel files for this case.
+    # nnUNetv2 expects files like: case_0000.nii.gz, case_0001.nii.gz, etc., where the
+    # 4-digit suffix is the modality/channel index. NOTE: Path.stem only strips the last
+    # extension, so for a ".nii.gz" file it leaves "case_0000.nii" and the "_0000" suffix
+    # is never removed -- which silently loads only channel 0 and breaks multi-modality
+    # models (their first conv expects N>1 input channels). We therefore strip the dataset
+    # file_ending explicitly and match every channel for the case.
     base_path = Path(input_file)
     input_folder = base_path.parent
-    case_id = base_path.stem
 
-    # Remove channel suffix if present (e.g., _0000)
-    if case_id.endswith("_0000"):
-        case_id = case_id[:-5]
+    # Dataset file ending (e.g. ".nii.gz"); fall back to the path's suffixes if absent.
+    file_ending = predictor.dataset_json.get("file_ending")
+    if not file_ending:
+        file_ending = "".join(base_path.suffixes) or base_path.suffix
 
-    # Find all channel files for this case
-    all_files = subfiles(str(input_folder), suffix=base_path.suffix, join=True)
-    case_files = [f for f in all_files if Path(f).stem.startswith(case_id)]
+    def _strip_ending(name: str) -> str:
+        return name[: -len(file_ending)] if file_ending and name.endswith(file_ending) else name
+
+    # case_id = filename minus file_ending minus the trailing "_NNNN" channel suffix.
+    case_core = _strip_ending(base_path.name)
+    case_id = re.sub(r"_\d{4}$", "", case_core)
+
+    # Match all channel files for exactly this case: "{case_id}_NNNN{file_ending}".
+    channel_pattern = re.compile(rf"^{re.escape(case_id)}_\d{{4}}$")
+    all_files = subfiles(str(input_folder), suffix=file_ending, join=True)
+    case_files = [f for f in all_files if channel_pattern.match(_strip_ending(Path(f).name))]
     case_files.sort()
 
     if len(case_files) == 0:
-        # Single file, no channels
+        # Single file, no channels detected -- use the input as-is.
         case_files = [input_file]
+
+    # Guard: a multi-modality model needs all its channels. Fail loudly with a clear
+    # message instead of the opaque conv "expected N channels, got 1" RuntimeError.
+    expected_channels = len(predictor.dataset_json.get("channel_names", {})) or None
+    if expected_channels is not None and len(case_files) != expected_channels:
+        raise RuntimeError(
+            f"Channel mismatch for case '{case_id}': found {len(case_files)} channel "
+            f"file(s) {[Path(f).name for f in case_files]} but the model expects "
+            f"{expected_channels} (channel_names={predictor.dataset_json.get('channel_names')}). "
+            f"Check that all '{case_id}_NNNN{file_ending}' files exist in {input_folder}."
+        )
 
     # Create data iterator
     list_of_lists = [case_files]
