@@ -178,6 +178,16 @@ def compute_cam_with_sliding_window(
     # Get target layers
     target_layers = get_target_layer(model, target_layer_name)
 
+    # Grad-CAM only needs gradients w.r.t. the target layer's ACTIVATIONS, never the
+    # model weights. Leaving parameters trainable forces autograd to store every conv's
+    # input activation (the large full-resolution feature maps) so it can compute weight
+    # gradients that are immediately discarded -- which causes OOM during the forward on
+    # big 3D patches. Freezing the parameters lets autograd drop those activations; the
+    # graph is instead anchored on the input (see workon.requires_grad_(True) below) so
+    # gradients still flow back to the target layer.
+    for _p in model.parameters():
+        _p.requires_grad_(False)
+
     # Pad data to match patch size
     cam_data, slicer_revert_padding = pad_nd_image(
         data,
@@ -261,7 +271,13 @@ def compute_cam_with_sliding_window(
                 car_mask_float = np.float32(car_mask == target_class)
                 targets = [SemanticSegmentationTarget(target_class, car_mask_float)]
 
-                # Compute CAM for this patch
+                # Compute CAM for this patch.
+                # With the model parameters frozen (above), the autograd graph must be
+                # anchored on the input instead, otherwise no tensor requires grad and
+                # backward fails. Making the input require grad builds the graph while
+                # still skipping the (large) saved conv inputs needed only for weight
+                # gradients -- which is what keeps peak memory low on big 3D patches.
+                workon = workon.requires_grad_(True)
                 cam_output = cam(input_tensor=workon, targets=targets)[0, :]
                 grayscale_cam = torch.from_numpy(cam_output).to(device)
 
