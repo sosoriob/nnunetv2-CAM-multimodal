@@ -212,7 +212,7 @@ def compute_cam_with_sliding_window(
         )
 
     # Initialize predicted CAM
-    predicted_cam = torch.zeros((1, *cam_data.shape[1:]), dtype=torch.half, device=device)
+    predicted_cam = torch.zeros((1, *cam_data.shape[1:]), dtype=torch.float32, device=device)
 
     # Select CAM class from available methods
     method_name = method.lower()
@@ -237,10 +237,10 @@ def compute_cam_with_sliding_window(
 
         predicted_cam_file = torch.zeros(
             (1, *cam_data.shape[1:]),
-            dtype=torch.half,
+            dtype=torch.float32,
             device=device,
         )
-        n_predictions_cam_file = torch.zeros(cam_data.shape[1:], dtype=torch.half, device=device)
+        n_predictions_cam_file = torch.zeros(cam_data.shape[1:], dtype=torch.float32, device=device)
 
         # Create GradCAM object
         with cam_class(model, target_layers=target_layers, **cam_kwargs) as cam:

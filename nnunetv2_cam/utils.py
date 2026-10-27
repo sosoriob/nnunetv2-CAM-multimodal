@@ -14,7 +14,12 @@ import torch
 from PIL import Image
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from tqdm import tqdm
-
+try:
+        import SimpleITK as sitk
+except ImportError:
+    raise ImportError(
+        "SimpleITK is required for saving NIfTI files. " "Install with: pip install SimpleITK"
+    )
 
 def save_cam_slices(
     predicted_cam: torch.Tensor,
@@ -147,15 +152,12 @@ def save_heatmap_nifti(
         reference_image_path: Path to reference image (for getting affine)
         affine: Affine transformation matrix (alternative to reference_image_path)
     """
-    try:
-        import SimpleITK as sitk
-    except ImportError:
-        raise ImportError(
-            "SimpleITK is required for saving NIfTI files. " "Install with: pip install SimpleITK"
-        )
 
     # Convert to SimpleITK image
-    if heatmap.ndim == 2:
+    if heatmap.ndim == 4 and heatmap.shape[0] == 1:
+        # run_cam_for_prediction output (1, Z, Y, X): already in SimpleITK array order, no transpose
+        sitk_image = sitk.GetImageFromArray(heatmap[0])
+    elif heatmap.ndim == 2:
         # 2D image
         sitk_image = sitk.GetImageFromArray(heatmap)
     elif heatmap.ndim == 3:

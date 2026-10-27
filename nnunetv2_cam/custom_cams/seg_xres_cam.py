@@ -37,7 +37,10 @@ class SegXResCAM(BaseCAM):
 
             
             orig_shape = grads_tensor.shape
-            
+            # Grads are fp16 under autocast; CPU avg_pool function just down has no Half kernel, so pool in fp32
+            orig_dtype = grads_tensor.dtype
+            grads_tensor = grads_tensor.float()
+
             # We need to handle 2D and 3D cases
             if len(orig_shape) == 4: # (B, C, H, W)
                 # Pool
@@ -66,6 +69,7 @@ class SegXResCAM(BaseCAM):
                 # Fallback or error? Let's assume it matches
                 upsampled = grads_tensor
 
+            
             if is_numpy:
                 grads = upsampled.cpu().numpy()
             else:
